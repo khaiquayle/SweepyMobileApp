@@ -1,6 +1,6 @@
 import { Audio } from 'expo-av';
 import React, { useRef, useState } from "react";
-import { Alert, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 export default function Index() {
   const [recording, setRecording] = useState<null | Audio.Recording>(null);
