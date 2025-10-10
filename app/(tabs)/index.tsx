@@ -19,7 +19,7 @@ export default function Index() {
       setIsPlaying(true);
       
       const { sound } = await Audio.Sound.createAsync(
-        require('@/assets/sounds/beep.wav')
+        require('@/assets/sounds/audiocheck.net_sweep_10Hz_22000Hz_-3dBFS_1s.wav')
       );
       
       await sound.playAsync();
@@ -48,7 +48,7 @@ export default function Index() {
 
       // Load sweep sound first
       const { sound } = await Audio.Sound.createAsync(
-        require('@/assets/sounds/beep.wav'),
+        require('@/assets/sounds/audiocheck.net_sweep_10Hz_22000Hz_-3dBFS_1s.wav'),
         { shouldPlay: false, volume: 1.0 }
       );
 
@@ -98,7 +98,7 @@ export default function Index() {
 
     } catch (err) {
       console.error("Failed to start recording", err);
-      Alert.alert("Failed to start recording", err.message);
+      Alert.alert("Failed to start recording", err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -288,3 +288,4 @@ const styles = StyleSheet.create({
     lineHeight: 22,
   },
 });
+

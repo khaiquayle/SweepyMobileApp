@@ -56,3 +56,4 @@ This app is designed to work with a machine learning pipeline that processes the
 - Enhanced recycling guidance
 - Material-specific tips and information
 - Offline classification capabilities
+
