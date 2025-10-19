@@ -12,7 +12,7 @@ export default function TabLayout() {
         name="index"
         options={{
           title: 'Scan',
-          tabBarIcon: ({ color }) => <Ionicons name="scan" size={28} color={color} />,
+          tabBarIcon: ({ color }) => <Ionicons name="barcode" size={28} color={color} />,
         }}
       />
       <Tabs.Screen

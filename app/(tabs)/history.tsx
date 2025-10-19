@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { FlatList, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 type ScanResult = {
   id: string;
@@ -23,6 +24,11 @@ export default function HistoryScreen() {
 
   return (
     <View style={styles.container}>
+      <View style={styles.brandHeader}>
+        <View style={styles.brandIcon}><Ionicons name="leaf" size={18} color="#16a34a" /></View>
+        <Text style={styles.brandTitle}>Sweepy</Text>
+      </View>
+      <Text style={styles.subheader}>Smart Recycling Classification</Text>
       <Text style={styles.header}>Scan History</Text>
       <FlatList
         data={scans}
@@ -38,19 +44,12 @@ export default function HistoryScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#F5F5F7',
-    padding: 24,
-    paddingTop: 80,
-  },
-  header: {
-    fontSize: 34,
-    fontWeight: '700',
-    marginBottom: 32,
-    color: '#1D1D1F',
-    letterSpacing: -0.5,
-  },
+  container: { flex: 1, backgroundColor: '#FFFFFF', padding: 24, paddingTop: 64 },
+  brandHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+  brandIcon: { width: 32, height: 32, borderRadius: 8, backgroundColor: '#EAF8EE', alignItems: 'center', justifyContent: 'center', marginRight: 8 },
+  brandTitle: { fontSize: 22, fontWeight: '700', color: '#10b981' },
+  subheader: { fontSize: 16, fontWeight: '500', color: '#6b7280', textAlign: 'center', marginTop: 8, marginBottom: 20 },
+  header: { fontSize: 22, fontWeight: '700', marginBottom: 20, color: '#111827' },
   list: {
     paddingBottom: 24,
   },
