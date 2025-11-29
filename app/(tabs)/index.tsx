@@ -1,9 +1,12 @@
 import { Audio } from 'expo-av';
+import * as FileSystem from 'expo-file-system/legacy';
 import React, { useEffect, useRef, useState } from "react";
 import { Alert, StyleSheet, Text, TouchableOpacity, View, Modal, Animated, Easing } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Path } from 'react-native-svg';
 import { LinearGradient } from 'expo-linear-gradient';
+import AudioRecord from 'react-native-audio-record';
+import { classifyMaterial, initializeClassifier } from '@/lib/materialClassifier';
 
 type Classification = {
   label: string;
@@ -11,25 +14,73 @@ type Classification = {
   recyclability: 'Recyclable' | 'Not Recyclable' | 'Check Locally';
 };
 
+// Recyclability info for each material
+const RECYCLABILITY_INFO: Record<string, { recyclability: Classification['recyclability']; info: string; locations: string[] }> = {
+  'Metal': {
+    recyclability: 'Recyclable',
+    info: 'Metal cans and containers are highly recyclable. Rinse before recycling. Aluminum can be recycled indefinitely without losing quality.',
+    locations: ['Curbside Recycling', 'Scrap Metal Centers', 'Recycling Drop-off'],
+  },
+  'Plastic': {
+    recyclability: 'Check Locally',
+    info: 'Plastic recyclability varies by type (check the number inside the recycling symbol). Most curbside programs accept #1 and #2 plastics.',
+    locations: ['Curbside (types 1-2)', 'Special Collection', 'Grocery Store Drop-off'],
+  },
+  'Paper': {
+    recyclability: 'Recyclable',
+    info: 'Paper and cardboard are easily recyclable. Keep dry and clean. Paper can be recycled 5-7 times before fibers become too short.',
+    locations: ['Curbside Recycling', 'Paper Recycling Bins', 'Cardboard Drop-off'],
+  },
+  'Organic Material': {
+    recyclability: 'Not Recyclable',
+    info: 'Organic materials should be composted, not recycled. They can contaminate recycling streams but make excellent compost!',
+    locations: ['Home Composting', 'Municipal Compost', 'Community Gardens'],
+  },
+  'Glass': {
+    recyclability: 'Recyclable',
+    info: 'Glass is 100% recyclable and can be recycled endlessly. Separate by color if required. Remove lids before recycling.',
+    locations: ['Curbside Recycling', 'Bottle Return', 'Glass Drop-off'],
+  },
+};
+
 export default function Index() {
-  const [recording, setRecording] = useState<null | Audio.Recording>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [phase, setPhase] = useState<'idle' | 'playing' | 'classifying'>('idle');
+  const [isRecording, setIsRecording] = useState(false);
+  const [phase, setPhase] = useState<'idle' | 'loading_model' | 'ambient' | 'playing' | 'classifying'>('idle');
   const [showResultModal, setShowResultModal] = useState(false);
   const [classification, setClassification] = useState<Classification | null>(null);
+  const [classifierReady, setClassifierReady] = useState(false);
+  
   const isRecordingRef = useRef(false);
   const sweepSoundRef = useRef<Audio.Sound | null>(null);
+  const autoStopTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // --- ANIMATIONS ---
-  // Spin + pulse animation
   const rotation = useRef(new Animated.Value(0)).current;
   const pulse = useRef(new Animated.Value(1)).current;
-  // Sparkle animation
   const sparkleAnim = useRef(new Animated.Value(0)).current;
 
-  // Effect for spin + pulse
+  // Initialize AudioRecord for uncompressed WAV recording (but NOT the classifier - that's lazy)
   useEffect(() => {
-    if (phase === 'playing') {
+    const options = {
+      sampleRate: 44100,        // High quality sample rate
+      channels: 1,              // Mono (1 channel)
+      bitsPerSample: 16,        // 16-bit PCM
+      audioSource: 1,           // Android: MIC (no echo cancellation) - was 6 (VOICE_RECOGNITION) which filters out speaker output
+      wavFile: 'sweep_recording.wav'  // Temporary filename
+    };
+    
+    AudioRecord.init(options);
+    
+    // DON'T initialize classifier here - it will load lazily on first scan
+    
+    return () => {
+      // Cleanup
+    };
+  }, []);
+
+  // Animation effects
+  useEffect(() => {
+    if (phase === 'loading_model' || phase === 'ambient' || phase === 'playing' || phase === 'classifying') {
       Animated.loop(
         Animated.timing(rotation, {
           toValue: 1,
@@ -53,13 +104,12 @@ export default function Index() {
     }
   }, [phase, rotation, pulse]);
 
-  // Effect for sparkles
   useEffect(() => {
-    if (phase === 'playing') {
+    if (phase === 'loading_model' || phase === 'ambient' || phase === 'playing' || phase === 'classifying') {
       Animated.loop(
         Animated.timing(sparkleAnim, {
           toValue: 1,
-          duration: 1500, // 1.5 second loop
+          duration: 1500,
           easing: Easing.linear,
           useNativeDriver: true,
         })
@@ -69,152 +119,147 @@ export default function Index() {
       sparkleAnim.setValue(0);
     }
   }, [phase, sparkleAnim]);
-  // --- END ANIMATIONS ---
 
-  const playSweepSound = async () => {
-    if (isPlaying) {
-      Alert.alert('Sound is already playing!');
-      return;
-    }
-
+  const startScan = async () => {
     try {
-      setIsPlaying(true);
-      setPhase('playing');
-      
-      const { sound } = await Audio.Sound.createAsync(
-        require('@/assets/sounds/audiocheck.net_sweep_10Hz_22000Hz_-3dBFS_1s.wav')
-      );
-      
-      await sound.playAsync();
-      
-      // Wait for sound to finish
-      sound.setOnPlaybackStatusUpdate((status) => {
-        if (status.isLoaded && status.didJustFinish) {
-          setIsPlaying(false);
-          setPhase('classifying');
-          sound.unloadAsync();
-          // Simulate classification step
-          setTimeout(() => {
-            const materials = ['Cardboard', 'Glass', 'Aluminum', 'Plastic'];
-            const label = materials[Math.floor(Math.random() * materials.length)];
-            const confidence = Math.max(0.6, Math.random());
-            setClassification({ label, confidence, recyclability: 'Recyclable' });
-            setShowResultModal(true);
-            setPhase('idle');
-          }, 1200);
-        }
-      });
-      
-    } catch (error) {
-      Alert.alert('Error playing sound:', String(error));
-      setIsPlaying(false);
-      setPhase('idle');
-    }
-  };
-
-  const startRecordingWithSound = async () => {
-    try {
+      // Request permissions
       const permission = await Audio.requestPermissionsAsync();
       if (permission.status !== "granted") {
-        Alert.alert("Permission to access microphone is required!");
+        Alert.alert("Permission Required", "Microphone access is needed to scan materials.");
         return;
       }
 
-      // Load sweep sound first
-      const { sound } = await Audio.Sound.createAsync(
-        require('@/assets/sounds/audiocheck.net_sweep_10Hz_22000Hz_-3dBFS_1s.wav'),
-        { shouldPlay: false, volume: 1.0 }
-      );
+      // Load ML model on first scan (lazy loading)
+      if (!classifierReady) {
+        setPhase('loading_model');
+        const ready = await initializeClassifier();
+        setClassifierReady(ready);
+        if (!ready) {
+          Alert.alert("Error", "Failed to load classification model. Please try again.");
+          setPhase('idle');
+          return;
+        }
+      }
 
-      // Set audio mode for recording with maximum playback volume
+      // Set audio mode
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: true,
         playsInSilentModeIOS: true,
         shouldDuckAndroid: false,
         playThroughEarpieceAndroid: false,
         staysActiveInBackground: false,
-        interruptionModeIOS: 1, // DoNotMix - full volume, no ducking
-        interruptionModeAndroid: 1, // DoNotMix - full volume, no ducking
+        interruptionModeIOS: 1,
+        interruptionModeAndroid: 1,
       });
 
-      sweepSoundRef.current = sound;
-
-      // Start recording
-      const { recording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
-      );
-      setRecording(recording);
+      // Start recording with AudioRecord (uncompressed WAV)
+      AudioRecord.start();
+      setIsRecording(true);
       isRecordingRef.current = true;
+      setPhase('ambient');
 
-      // Play the sweep sound at maximum volume
+      // Wait 1.5 seconds for ambient noise collection
+      await new Promise(resolve => setTimeout(resolve, 1500));
+
+      // Load and play sweep sound
+      const { sound } = await Audio.Sound.createAsync(
+        require('@/assets/sounds/audiocheck.net_sweep_10Hz_22000Hz_-3dBFS_1s.wav'),
+        { shouldPlay: false, volume: 1.0 }
+      );
+
+      sweepSoundRef.current = sound;
+      setPhase('playing');
+
+      // Get sound duration
+      const status = await sound.getStatusAsync();
+      const soundDuration = status.isLoaded && status.durationMillis ? status.durationMillis : 1000;
+
+      // Play the sweep sound
       await sound.setVolumeAsync(1.0);
       await sound.playAsync();
 
-      Alert.alert("Recording with sweep sound...");
-
-      // Auto-stop recording when sweep ends
-      const status = await sound.getStatusAsync();
-      if (status.isLoaded && status.durationMillis) {
-        setTimeout(() => {
-          if (isRecordingRef.current && recording) {
-            stopRecording();
-          }
-          sound.unloadAsync();
-        }, status.durationMillis + 500);
-      }
-
-      // Cleanup when sound finishes playing
-      sound.setOnPlaybackStatusUpdate((status) => {
-        if (status.isLoaded && status.didJustFinish) {
-          sound.unloadAsync();
-        }
-      });
+      // Auto-stop after sweep + 500ms buffer
+      autoStopTimerRef.current = setTimeout(() => {
+        stopAndClassify();
+      }, soundDuration + 500) as unknown as NodeJS.Timeout;
 
     } catch (err) {
-      console.error("Failed to start recording", err);
-      Alert.alert("Failed to start recording", err instanceof Error ? err.message : String(err));
+      console.error("Failed to start scan:", err);
+      Alert.alert("Error", "Failed to start material scan. Please try again.");
+      resetState();
     }
   };
 
-  const stopRecording = async () => {
+  const stopAndClassify = async () => {
     try {
-      if (!recording || !isRecordingRef.current) return;
+      if (!isRecordingRef.current) return;
 
-      // Stop and unload the sweep sound if it's still playing
+      // Clear timer
+      if (autoStopTimerRef.current) {
+        clearTimeout(autoStopTimerRef.current);
+        autoStopTimerRef.current = null;
+      }
+
+      // Stop sweep sound
       if (sweepSoundRef.current) {
         try {
           await sweepSoundRef.current.stopAsync();
           await sweepSoundRef.current.unloadAsync();
           sweepSoundRef.current = null;
-        } catch (soundErr) {
-          console.error("Error stopping sweep sound:", soundErr);
+        } catch (e) {
+          console.error("Error stopping sound:", e);
         }
       }
 
+      // Stop recording
+      const recordingUri = await AudioRecord.stop();
       isRecordingRef.current = false;
-      await recording.stopAndUnloadAsync();
-      const uri = recording.getURI();
-      setRecording(null);
+      setIsRecording(false);
+      setPhase('classifying');
 
-      Alert.alert("Recording complete!", "Processing your scan...");
-      
-      // Simulate processing time and show result (legacy path)
-      setTimeout(() => {
-        const materials = ['Plastic', 'Glass', 'Metal', 'Paper'];
-        const randomMaterial = materials[Math.floor(Math.random() * materials.length)];
-        setClassification({ label: randomMaterial, confidence: 0.9, recyclability: 'Recyclable' });
+      // Copy to app documents for processing
+      const destUri = `${FileSystem.documentDirectory}sweep_scan.wav`;
+      await FileSystem.copyAsync({
+        from: recordingUri,
+        to: destUri,
+      });
+
+      // Run classification
+      const result = await classifyMaterial(destUri);
+
+      if (result) {
+        const materialInfo = RECYCLABILITY_INFO[result.material] || RECYCLABILITY_INFO['Plastic'];
+        
+        setClassification({
+          label: result.material,
+          confidence: result.confidence,
+          recyclability: materialInfo.recyclability,
+        });
         setShowResultModal(true);
-      }, 2000);
+      } else {
+        Alert.alert("Scan Failed", "Could not classify the material. Please try again.");
+      }
+
+      setPhase('idle');
 
     } catch (err) {
-      console.error("Failed to stop recording", err);
-      Alert.alert("Failed to stop recording");
+      console.error("Failed to classify:", err);
+      Alert.alert("Error", "Classification failed. Please try again.");
+      resetState();
     }
   };
 
-  // --- RENDER ---
+  const resetState = () => {
+    setIsRecording(false);
+    isRecordingRef.current = false;
+    setPhase('idle');
+    if (autoStopTimerRef.current) {
+      clearTimeout(autoStopTimerRef.current);
+      autoStopTimerRef.current = null;
+    }
+  };
 
-  // Create staggered opacity values for 3 sparkles
+  // Sparkle animations
   const sparkle1Opacity = sparkleAnim.interpolate({
     inputRange: [0, 0.2, 0.4],
     outputRange: [0, 1, 0],
@@ -230,6 +275,8 @@ export default function Index() {
     outputRange: [0, 1, 0],
     extrapolate: 'clamp',
   });
+
+  const materialInfo = classification ? RECYCLABILITY_INFO[classification.label] : null;
 
   return (
     <View style={styles.container}>
@@ -252,12 +299,15 @@ export default function Index() {
           ]}
         >
           <LinearGradient
-            // --- NEW GRADIENT: Bright cyan to a rich teal/blue-green ---
             colors={['#6ee7b7', '#16a34a']} 
             style={styles.gradientFill}
           >
-            {phase === 'playing' ? (
+            {phase === 'loading_model' ? (
+              <Ionicons name="cloud-download" size={68} color="#ffffff" />
+            ) : (phase === 'ambient' || phase === 'playing') ? (
               <Ionicons name="musical-notes" size={68} color="#ffffff" />
+            ) : phase === 'classifying' ? (
+              <Ionicons name="analytics" size={68} color="#ffffff" />
             ) : (
               <Svg width={90} height={54} viewBox="0 0 90 54">
                 <Path d="M5 20c10-12 20 12 30 0s20 12 30 0 20 12 20 0" stroke="#fff" strokeWidth={6} fill="none" strokeLinecap="round"/>
@@ -265,8 +315,7 @@ export default function Index() {
               </Svg>
             )}
 
-            {/* --- ADDED SPARKLES (only visible when phase === 'playing') --- */}
-            {phase === 'playing' && (
+            {(phase === 'loading_model' || phase === 'ambient' || phase === 'playing' || phase === 'classifying') && (
               <>
                 <Animated.View style={[styles.sparkle, styles.sparkle1, { opacity: sparkle1Opacity }]}>
                   <Ionicons name="sparkles" size={24} color="#f0f9ff" />
@@ -279,32 +328,35 @@ export default function Index() {
                 </Animated.View>
               </>
             )}
-            {/* --- END SPARKLES --- */}
-
           </LinearGradient>
         </Animated.View>
 
         <Text style={styles.stateTitle}>
+          {phase === 'loading_model' && 'Loading AI Model...'}
+          {phase === 'ambient' && 'Capturing Ambient...'}
           {phase === 'playing' && 'Playing Sound Sweep...'}
-          {phase === 'classifying' && 'Classifying...'}
+          {phase === 'classifying' && 'Classifying Material...'}
           {phase === 'idle' && 'Ready to Scan'}
         </Text>
         <Text style={styles.stateSubtitle}>
           {phase === 'idle' && 'Point your device at an item and tap to classify'}
+          {phase === 'loading_model' && 'First scan - preparing neural network'}
+          {phase === 'ambient' && 'Recording background noise'}
           {phase === 'playing' && 'Analyzing reflected frequencies'}
           {phase === 'classifying' && 'Processing material data'}
         </Text>
       </View>
 
       <TouchableOpacity
-        style={styles.ctaButton}
-        onPress={playSweepSound}
-        disabled={isPlaying}
+        style={[styles.ctaButton, phase !== 'idle' && styles.ctaButtonActive]}
+        onPress={startScan}
+        disabled={phase !== 'idle'}
         activeOpacity={0.9}
-        
       >
-        <Ionicons name="sparkles" size={20} color="#ffffff" style={{ marginRight: 8 }} />
-        <Text style={styles.ctaText}>Play Sound & Classify</Text>
+        <Ionicons name="scan" size={20} color="#ffffff" style={{ marginRight: 8 }} />
+        <Text style={styles.ctaText}>
+          {phase === 'loading_model' ? 'Loading Model...' : phase !== 'idle' ? 'Scanning...' : 'Scan Material'}
+        </Text>
       </TouchableOpacity>
 
       <View style={{ flex: 1 }} />
@@ -328,26 +380,28 @@ export default function Index() {
 
             <View style={styles.confidenceBarWrapper}>
               <View style={[styles.confidenceBarFill, { width: `${Math.round((classification?.confidence ?? 0.9) * 100)}%` }]} />
-              <Text style={styles.confidenceLabel}>{Math.round((classification?.confidence ?? 0.9) * 100)}%</Text>
+              <Text style={styles.confidenceLabel}>{Math.round((classification?.confidence ?? 0.9) * 100)}% confidence</Text>
             </View>
 
             <View style={styles.infoBlock}>
-              <View style={styles.infoHeader}><Ionicons name="leaf" size={18} color="#16a34a" /><Text style={styles.infoTitle}>Recyclability</Text></View>
-              <Text style={styles.infoBody}>This item can be recycled! ♻️</Text>
+              <View style={styles.infoHeader}>
+                <Ionicons 
+                  name={classification?.recyclability === 'Recyclable' ? 'checkmark-circle' : classification?.recyclability === 'Not Recyclable' ? 'close-circle' : 'help-circle'} 
+                  size={18} 
+                  color={classification?.recyclability === 'Recyclable' ? '#16a34a' : classification?.recyclability === 'Not Recyclable' ? '#dc2626' : '#f59e0b'} 
+                />
+                <Text style={styles.infoTitle}>Recyclability: {classification?.recyclability}</Text>
+              </View>
+              <Text style={styles.infoBody}>{materialInfo?.info || 'Check local recycling guidelines for this material.'}</Text>
             </View>
 
             <View style={styles.infoBlock}>
               <View style={styles.infoHeader}><Ionicons name="location" size={18} color="#0ea5a4" /><Text style={styles.infoTitle}>Where to Recycle</Text></View>
               <View style={styles.badgeRow}>
-                <Text style={styles.badge}>Curbside Recycling</Text>
-                <Text style={styles.badge}>Recycling Centers</Text>
-                <Text style={styles.badge}>Drop-off Locations</Text>
+                {(materialInfo?.locations || ['Check Locally']).map((loc, i) => (
+                  <Text key={i} style={styles.badge}>{loc}</Text>
+                ))}
               </View>
-            </View>
-
-            <View style={styles.infoBlock}>
-              <View style={styles.infoHeader}><Ionicons name="information-circle" size={18} color="#f59e0b" /><Text style={styles.infoTitle}>Additional Information</Text></View>
-              <Text style={styles.infoBody}>Cardboard is one of the most recycled materials and can be recycled 5-7 times before fibers become too short.</Text>
             </View>
 
             <TouchableOpacity style={styles.secondaryCta} onPress={() => setShowResultModal(false)}>
@@ -413,6 +467,9 @@ const styles = StyleSheet.create({
     shadowOpacity: .8,
     shadowRadius: 3.84,
   },
+  ctaButtonActive: {
+    backgroundColor: '#dc2626',
+  },
   ctaText: { color: '#FFFFFF', fontSize: 18, fontWeight: '700' },
 
   quickRow: { marginTop: 36, flexDirection: 'row', justifyContent: 'space-between' },
@@ -427,7 +484,7 @@ const styles = StyleSheet.create({
   resultSubtitleText: { color: '#dcfce7', fontSize: 12, marginTop: 2 },
   confidenceBarWrapper: { margin: 16, height: 10, backgroundColor: '#e5e7eb', borderRadius: 999, overflow: 'hidden', position: 'relative' },
   confidenceBarFill: { position: 'absolute', top: 0, left: 0, bottom: 0, backgroundColor: '#16a34a' },
-  confidenceLabel: { position: 'absolute', right: 8, top: -22, fontSize: 12, color: '#6b7280' },
+  confidenceLabel: { position: 'absolute', right: 0, top: -22, fontSize: 12, color: '#6b7280' },
   infoBlock: { backgroundColor: '#F8FAFC', borderRadius: 12, padding: 14, marginHorizontal: 14, marginBottom: 12 },
   infoHeader: { flexDirection: 'row', alignItems: 'center' },
   infoTitle: { marginLeft: 6, fontSize: 14, fontWeight: '700', color: '#111827' },
@@ -437,7 +494,6 @@ const styles = StyleSheet.create({
   secondaryCta: { margin: 16, paddingVertical: 14, borderRadius: 12, backgroundColor: '#16a34a', alignItems: 'center' },
   secondaryCtaText: { color: '#fff', fontSize: 16, fontWeight: '700' },
 
-  // --- NEW SPARKLE STYLES ---
   sparkle: {
     position: 'absolute',
   },
